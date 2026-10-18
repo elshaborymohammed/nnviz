@@ -1,0 +1,3 @@
+torch>=2.1
+transformers  # optional, only for examples/hf_demo.py
+# system dependency: Graphviz (`brew install graphviz` / `apt install graphviz`)

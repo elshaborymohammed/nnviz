@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nnviz"
+version = "0.1.0"
+description = "Draw any PyTorch model as a Transformer-paper-style block diagram"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "Mohammed Elshaboury", email = "elshaborymohammed@gmail.com" }]
+dependencies = ["torch>=2.1"]
+
+[project.optional-dependencies]
+hf = ["transformers"]
+plot = ["matplotlib"]
+
+[tool.setuptools]
+packages = ["nnviz"]
