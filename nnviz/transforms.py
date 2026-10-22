@@ -194,12 +194,41 @@ def merge_feed_forward(graph: Graph) -> None:
             continue
         detail = _width_detail(graph, ids)
         scope = _common_scope([n.path for n in body])
+        # In data-flow order: hooks can record a module after the ops it wraps.
+        flow = sorted(body, key=lambda n: len(graph.ancestors(n.id) & ids))
+        extras = [_extra_label(n) for n in flow if categorize(n) in ("activation", "dropout")]
         graph.merge(ids, Node(
             id=f"ffn_{min(ids)}", kind="module", type="FeedForward",
             name=scope, path=scope,
             params=sum(n.params for n in body), order=max(n.order for n in body),
             label="Feed Forward", detail=detail, category="ffn",
-            meta={"repeat": body[0].meta.get("repeat")}))
+            meta={"repeat": body[0].meta.get("repeat"), "extras": list(dict.fromkeys(extras))}))
+
+
+def fuse_linear_extras(graph: Graph) -> None:
+    """Fold the activation and dropout right after a linear layer into it,
+    shown as one extra line on the block (``ReLU · Dropout p=0.2``)."""
+    preds, succs = adjacency(graph)
+    for n in sorted(graph.nodes.values(), key=lambda n: n.order):
+        if n.id not in graph.nodes or categorize(n) != "linear" or n.kind not in ("module", "op"):
+            continue
+        extras = n.meta.setdefault("extras", [])
+        tail = n.id
+        while len(succs.get(tail, [])) == 1:
+            nxt = graph.nodes.get(succs[tail][0])
+            if nxt is None or categorize(nxt) not in ("activation", "dropout") \
+                    or len(preds.get(nxt.id, [])) != 1:
+                break
+            extras.append(_extra_label(nxt))
+            graph.dissolve(nxt.id)
+            preds, succs = adjacency(graph)
+
+
+def _extra_label(n: Node) -> str:
+    if categorize(n) == "dropout":
+        p = n.detail or module_detail(n.meta.get("module"))
+        return "Dropout" + (f" {p}" if p else "")
+    return friendly_name(n.type)
 
 
 def merge_add_norm(graph: Graph) -> None:

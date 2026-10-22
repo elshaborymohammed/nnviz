@@ -133,6 +133,7 @@ class Theme:
     text_color: str = "#111111"
     muted_color: str = "#666666"
     param_color: str = "#2b6f8a"
+    extras_color: str = "#8a4b2b"     # activation / dropout line inside a block
     edge_color: str = "#222222"
     residual_color: str = "#222222"
     node_border: str = "#111111"

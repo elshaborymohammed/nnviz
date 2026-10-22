@@ -39,6 +39,9 @@ T5, Llama, ViT) to render the gallery into `out/`.
 - `collapse`: regex of class names to draw as single boxes, or `f(name, module) -> bool`
 - `max_depth`: also collapse every module at this depth
 - `collapse_repeats`, `merge_ffn`, `merge_add_norm`, `show_sublayers`
+- `fuse_activations`: draw the activation and dropout that follow a Linear layer as a
+  line inside its block (`ReLU · Dropout p=0.2`); Feed Forward blocks list theirs too
+  (default on)
 - `hide_dropout`: hide Dropout layers (shown by default; dropout inside a Feed Forward
   or attention block is drawn as part of that block)
 - `hide_inputs`: regex of inputs not to draw (default `mask`)

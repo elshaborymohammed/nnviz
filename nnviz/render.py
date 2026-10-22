@@ -138,6 +138,7 @@ class GraphvizRenderer:
         self.opt = options
         self._junction_ids: Set[str] = set()
         self._elbow_ids: Set[str] = set()
+        self._mirror_ids: Set[str] = set()
         self._lane: Dict[str, str] = {}
         self._block_width = self.MIN_BLOCK_WIDTH
 
@@ -177,7 +178,8 @@ class GraphvizRenderer:
         self._lane = self._lanes(graph, edges) if o.align_lanes else {}
         elbows: Dict[str, List[tuple]] = {}
         if o.splines in ("ortho", "polyline"):
-            edges = self._add_elbows(edges, junctions, elbows)
+            sublayers = {c.id: c for c in sublayer_of.values()}
+            edges = self._add_elbows(edges, junctions, sublayers, elbows)
         self._block_width = self._uniform_width(graph) if o.uniform_width else self.MIN_BLOCK_WIDTH
 
         def emit_cluster(c: Cluster, indent: str):
@@ -204,9 +206,11 @@ class GraphvizRenderer:
             for jid in junctions.get(c.id, []):
                 out.append(inner + _stmt(jid, self._lane_attrs(jid), shape="point", width=0.06,
                                          color=t.edge_color))
-            for eid, merge in elbows.get(c.id, []):
-                out.append(inner + _stmt(eid, {}, shape="point", width=0.01, style="invis"))
-                out.append(f'{inner}{{rank=same; "{merge}"; "{eid}";}}')
+            for eid, mid, merge in elbows.get(c.id, []):
+                for pid in filter(None, (eid, mid)):
+                    out.append(inner + _stmt(pid, {}, shape="point", width=0.01, style="invis"))
+                same = "; ".join(f'"{p}"' for p in (mid, merge, eid) if p)
+                out.append(f'{inner}{{rank=same; {same};}}')
             for nid in sorted(c.nodes - child_nodes, key=lambda n: graph.nodes[n].order):
                 if nid not in placed:
                     placed.add(nid)
@@ -230,9 +234,12 @@ class GraphvizRenderer:
                 lines.append(f'  {{rank=same; "{sid}"; "{n.id}";}}')
                 lines.append(f'  "{sid}" -> "{n.id}" [style=invis];')
 
-        aux = self._junction_ids | self._elbow_ids
+        aux = self._junction_ids | self._elbow_ids | self._mirror_ids
         for e in edges:
             if e.src not in graph.nodes and e.src not in aux or e.dst not in graph.nodes and e.dst not in aux:
+                continue
+            if e.kind == "mirror":
+                lines.append(f'  "{e.src}" -> "{e.dst}" [style=invis, weight=0];')
                 continue
             attrs = []
             if e.dst in aux:
@@ -248,7 +255,9 @@ class GraphvizRenderer:
                 if o.splines == "polyline" and e.dst not in self._elbow_ids:   # ortho ignores ports
                     attrs += ['tailport=e', 'headport=e'] if o.direction in ("BT", "TB") else \
                              ['tailport=s', 'headport=s']
-            if o.show_shapes and e.shape:
+            # A skip edge routed via an elbow carries the junction's shape, already
+            # labelled on the main line; a second label would only widen one side.
+            if o.show_shapes and e.shape and e.dst not in self._elbow_ids:
                 attrs.append(f'xlabel="{"×".join(str(s) for s in e.shape)}"')
             lines.append(f'  "{e.src}" -> "{e.dst}"' + (f' [{", ".join(attrs)}]' if attrs else "") + ";")
         lines.append("}")
@@ -284,16 +293,23 @@ class GraphvizRenderer:
         return out
 
     def _add_elbows(self, edges: List[Edge], junctions: Dict[str, List[str]],
-                    elbows: Dict[str, List[tuple]]) -> List[Edge]:
+                    sublayers: Dict[str, Cluster], elbows: Dict[str, List[tuple]]) -> List[Edge]:
         """Route each junction → merge residual through an invisible elbow point.
 
         Orthogonal splines ignore edge ports, so a residual can end up drawn on
         either side of its lane, sometimes straight through the blocks.  An elbow
         placed in the merge node's rank, just right of it (a flat ``merge → elbow``
         edge orders the two), pins the route: up the right-hand side, then into
-        the merge from the right.
+        the merge from the right.  An invisible copy of that route on the left
+        (``junction → mirror → merge``) reserves the same space there, so the
+        blocks stay centred in their boxes however the skip line is drawn.  It is
+        left out when another input enters the sublayer (the encoder memory of a
+        cross-attention): crossing it would push the blocks off their lane.
         """
         cluster_of = {jid: cid for cid, jids in junctions.items() for jid in jids}
+        side_input = {cid for cid, c in sublayers.items()
+                      if any(d.dst in c.nodes and d.src not in c.nodes and d.src not in self._junction_ids
+                             for d in edges)}
         out = []
         for e in edges:
             if e.kind != "residual" or e.src not in cluster_of:
@@ -301,9 +317,18 @@ class GraphvizRenderer:
                 continue
             eid = f"elbow_{e.src}__{e.dst}"
             self._elbow_ids.add(eid)
-            elbows.setdefault(cluster_of[e.src], []).append((eid, e.dst))
+            cid = cluster_of[e.src]
+            mid = None if cid in side_input else self._mirror_of(eid)
+            elbows.setdefault(cid, []).append((eid, mid, e.dst))
             out += [Edge(e.src, eid, e.shape, "residual"), Edge(e.dst, eid, None, "elbow")]
+            if mid:
+                self._mirror_ids.add(mid)
+                out += [Edge(e.src, mid, None, "mirror"), Edge(mid, e.dst, None, "mirror")]
         return out
+
+    @staticmethod
+    def _mirror_of(elbow_id: str) -> str:
+        return "mirror_" + elbow_id[len("elbow_"):]
 
     # ----------------------------------------------------------------- lanes
     def _lanes(self, graph: Graph, edges: List[Edge]) -> Dict[str, str]:
@@ -391,6 +416,8 @@ class GraphvizRenderer:
             rows.append((n.name, t.small_font_size, t.muted_color))
         if o.show_details and n.detail:
             rows.append((n.detail, t.small_font_size, t.muted_color))
+        if n.meta.get("extras"):
+            rows.append((" · ".join(n.meta["extras"]), t.small_font_size, t.extras_color))
         if o.show_params and n.params:
             rows.append((f"{human_count(n.params)} params", t.small_font_size, t.param_color))
         return rows

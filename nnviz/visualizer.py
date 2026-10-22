@@ -39,6 +39,8 @@ class NNVisualizer:
         merge_ffn: fold ``Linear → act → Linear`` residual branches into
             ``Feed Forward``.
         merge_add_norm: fuse ``x + sublayer(x) → LayerNorm`` into ``Add & Norm``.
+        fuse_activations: draw the activation and dropout that follow a linear
+            layer as a line inside its block (``ReLU · Dropout p=0.2``).
         hide_dropout: drop Dropout layers (Identity layers are always dropped).
         hide_inputs: regex of input names not to draw (masks by default).
         group_pattern: regex of module names drawn as labelled groups
@@ -56,6 +58,7 @@ class NNVisualizer:
                  collapse_repeats: bool = True,
                  merge_ffn: bool = True,
                  merge_add_norm: bool = True,
+                 fuse_activations: bool = True,
                  hide_dropout: bool = False,
                  hide_inputs: Optional[str] = r"mask",
                  group_pattern: Optional[str] = r"(^|\.)(encoder|decoder)$",
@@ -76,6 +79,7 @@ class NNVisualizer:
         self.collapse_repeats = collapse_repeats
         self.merge_ffn = merge_ffn
         self.merge_add_norm = merge_add_norm
+        self.fuse_activations = fuse_activations
         self.hide_dropout = hide_dropout
         self.hide_inputs = hide_inputs
         self.group_pattern = group_pattern
@@ -105,6 +109,8 @@ class NNVisualizer:
             ps.append(lambda g: T.collapse_repeats(g, m))
         if self.merge_ffn:
             ps.append(T.merge_feed_forward)
+        if self.fuse_activations:
+            ps.append(T.fuse_linear_extras)
         if self.merge_add_norm:
             ps.append(T.merge_add_norm)
         ps.extend(self.extra_passes)
